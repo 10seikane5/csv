@@ -3,11 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Square仕訳データ変換ツール</title>
+    <title>決済CSV 仕訳データ変換ツール</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         .table-container {
-            max-height: calc(100vh - 250px);
+            max-height: calc(100vh - 350px);
             overflow-y: auto;
         }
         th {
@@ -24,10 +24,10 @@
         
         <!-- ヘッダー部分 -->
         <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-            <h1 class="text-2xl font-bold mb-4 text-gray-800">Square取引データ 仕訳変換ツール</h1>
+            <h1 class="text-2xl font-bold mb-4 text-gray-800">決済CSV 仕訳データ変換ツール (Square, Airペイ等)</h1>
             <p class="text-sm text-gray-600 mb-6">
-                お手元のSquareの取引履歴ファイル（CSV）を選択してください。<br>
-                売上と手数料をそれぞれの行に分け、確定申告用の項目に自動変換します。データはブラウザ上でのみ処理され、外部に送信されることはありません。
+                お手元の取引履歴ファイル（CSV）を選択してください。<br>
+                Square以外のファイルでも、読み込みたい列を自由に指定することで、売上と手数料を分けた確定申告用のフォーマットに変換できます。
             </p>
             
             <div class="flex flex-col sm:flex-row gap-4 items-center justify-between bg-gray-50 p-4 rounded-lg border border-gray-100">
@@ -56,6 +56,43 @@
             </div>
         </div>
 
+        <!-- マッピング設定セクション（ファイル読み込み後に表示） -->
+        <div id="mappingSection" class="bg-white p-6 rounded-xl shadow-sm border border-gray-200 hidden border-t-4 border-t-blue-500">
+            <h2 class="text-lg font-bold mb-2 text-gray-800">列の割り当て（マッピング）設定</h2>
+            <p class="text-sm text-gray-600 mb-5">
+                CSVの列名を自動認識しました。各項目として読み込む列が正しいか確認し、違っている場合は手動で変更してください。
+            </p>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 bg-gray-50 p-4 rounded-lg">
+                <div>
+                    <label class="block text-sm font-bold text-gray-700 mb-1">📅 日付 <span class="text-red-500">*</span></label>
+                    <select id="col-date" class="w-full border border-gray-300 rounded-md py-2 px-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></select>
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-gray-700 mb-1">💰 売上（金額） <span class="text-red-500">*</span></label>
+                    <select id="col-sales" class="w-full border border-gray-300 rounded-md py-2 px-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></select>
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-gray-700 mb-1">💸 手数料</label>
+                    <select id="col-fee" class="w-full border border-gray-300 rounded-md py-2 px-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></select>
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-gray-700 mb-1">💳 決済手段</label>
+                    <select id="col-method" class="w-full border border-gray-300 rounded-md py-2 px-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></select>
+                </div>
+                <div>
+                    <label class="block text-sm font-bold text-gray-700 mb-1">📝 摘要・内容</label>
+                    <select id="col-memo" class="w-full border border-gray-300 rounded-md py-2 px-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></select>
+                </div>
+            </div>
+            
+            <div class="mt-5 flex justify-end">
+                <button id="generateBtn" class="bg-green-600 hover:bg-green-700 text-white py-2 px-8 rounded-md font-bold transition-colors duration-200 shadow-sm">
+                    この設定でデータを変換する
+                </button>
+            </div>
+        </div>
+
         <!-- テーブル部分 -->
         <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hidden" id="tableWrapper">
             <div class="table-container">
@@ -78,7 +115,7 @@
             </div>
             <div class="p-4 bg-gray-50 border-t text-sm text-gray-500 flex justify-between items-center">
                 <span id="recordCount">合計: 0件</span>
-                <span class="text-xs">※コピーボタンを押して、スプレッドシートのA1セルに貼り付けてください。</span>
+                <span class="text-xs font-bold text-blue-600">※上部の「結果をコピー」ボタンを押して、スプレッドシートのA1セルに貼り付けてください。</span>
             </div>
         </div>
         
@@ -88,6 +125,8 @@
     <div id="toast" class="hidden fixed bottom-6 right-6 px-6 py-3 rounded shadow-lg transition-opacity text-white z-50"></div>
 
     <script>
+        let currentCSVLines = [];
+        let dataStartIndex = 0;
         let generatedData = [];
 
         // ファイル入力のイベントリスナー
@@ -100,7 +139,7 @@
 
             reader.onload = function(event) {
                 const text = event.target.result;
-                processCSV(text);
+                analyzeCSV(text);
             };
 
             reader.onerror = function() {
@@ -129,7 +168,6 @@
             
             for (let i = 0; i < text.length; i++) {
                 let char = text[i];
-                
                 if (inQuotes) {
                     if (char === '"') {
                         if (i + 1 < text.length && text[i + 1] === '"') {
@@ -165,79 +203,160 @@
             return result;
         }
 
-        // データの処理と仕訳作成
-        function processCSV(text) {
-            // Squareのデータはタブ区切りの場合とカンマ区切りの場合がある
+        // CSVの解析とマッピングUIの表示
+        function analyzeCSV(text) {
             const delimiter = text.includes('\t') ? '\t' : ',';
-            const lines = parseCSV(text, delimiter);
+            currentCSVLines = parseCSV(text, delimiter);
             
-            let headerRowIndex = -1;
-            // ヘッダー行を探す（先頭15行以内にあると想定）
-            for (let i = 0; i < Math.min(15, lines.length); i++) {
-                const row = lines[i];
-                if (row.some(c => c.includes('日付')) && (row.some(c => c.includes('総売上高')) || row.some(c => c.includes('手数料')))) {
-                    headerRowIndex = i;
-                    break;
+            // ヘッダー行を探す（先頭10行の中で、列数が一番多い行をヘッダーと仮定）
+            let maxCols = 0;
+            let headerIndex = -1;
+            for (let i = 0; i < Math.min(10, currentCSVLines.length); i++) {
+                const row = currentCSVLines[i];
+                const validCols = row.filter(c => c.trim() !== '').length;
+                if (validCols > maxCols && validCols > 2) {
+                    maxCols = validCols;
+                    headerIndex = i;
                 }
             }
             
-            if (headerRowIndex === -1) {
-                showToast('エラー: 適切なヘッダー項目(日付/総売上高等)が見つかりません。文字コードを変更してお試しください。', true);
+            if (headerIndex === -1) {
+                showToast('エラー: 有効なCSVデータが見つかりません。', true);
                 return;
             }
             
-            const headers = lines[headerRowIndex].map(h => h.trim().replace(/^"|"$/g, ''));
-            generatedData = [];
+            const headers = currentCSVLines[headerIndex].map(h => h.trim().replace(/^"|"$/g, ''));
+            dataStartIndex = headerIndex + 1;
             
-            for (let i = headerRowIndex + 1; i < lines.length; i++) {
-                const row = lines[i];
-                if (row.length < headers.length * 0.5) continue; // 空行などはスキップ
+            setupMappingUI(headers);
+        }
+
+        // マッピングUIの構築
+        function setupMappingUI(headers) {
+            const selects = ['date', 'sales', 'fee', 'method', 'memo'];
+            
+            // 各項目に対する推測キーワード
+            const keywords = {
+                'date': ['日付', 'date', '取引日', '利用日', '発生日', 'お取引日'],
+                'sales': ['総売上高', '売上', '入金', '金額', 'お取引金額', '取引金額', '決済金額', '売上金額'],
+                'fee': ['手数料', '決済手数料'],
+                'method': ['カード種別', '決済手段', '決済方法', '支払方法', 'ソース', 'チャネル', 'ブランド', '電子マネー'],
+                'memo': ['レシート詳細', '顧客名', '摘要', '内容', '品名', 'メモ', '詳細', '商品']
+            };
+            
+            selects.forEach(key => {
+                const sel = document.getElementById(`col-${key}`);
+                sel.innerHTML = ''; // リセット
                 
-                const rowData = {};
+                // 手数料、手段、摘要は「なし」を選択可能に
+                if (key === 'fee' || key === 'method' || key === 'memo') {
+                    const opt = document.createElement('option');
+                    opt.value = '-1';
+                    opt.textContent = '（この項目は使用しない）';
+                    sel.appendChild(opt);
+                }
+                
                 headers.forEach((h, idx) => {
-                    rowData[h] = (row[idx] || '').trim().replace(/^"|"$/g, '');
+                    const opt = document.createElement('option');
+                    opt.value = idx;
+                    opt.textContent = h ? `${h} (列${idx + 1})` : `(列${idx + 1})`;
+                    sel.appendChild(opt);
                 });
                 
-                const date = rowData['日付'] || rowData['Date'];
-                if (!date || !date.match(/^\d{4}-\d{2}-\d{2}$/)) continue; // 日付形式でない行は除外
+                // キーワードに基づいて自動選択
+                let selectedIndex = -1;
+                for (let kw of keywords[key]) {
+                    const idx = headers.findIndex(h => h && h.toLowerCase().includes(kw.toLowerCase()));
+                    if (idx !== -1) {
+                        selectedIndex = idx;
+                        break;
+                    }
+                }
                 
-                // 金額の数値化 (例: "¥6,000" -> 6000)
-                const parseAmount = (val) => parseInt((val || '0').replace(/[¥,\s]/g, ''), 10) || 0;
+                if (selectedIndex !== -1) {
+                    sel.value = selectedIndex;
+                } else if (key === 'date' && headers.length > 0) {
+                    sel.value = 0; // わからなければ先頭列
+                } else if (key === 'sales' && headers.length > 1) {
+                    sel.value = 1; // わからなければ2列目
+                }
+            });
+            
+            // UIの表示切り替え
+            document.getElementById('mappingSection').classList.remove('hidden');
+            document.getElementById('tableWrapper').classList.add('hidden');
+            document.getElementById('copyBtn').classList.add('hidden');
+            
+            showToast('列の自動認識が完了しました。設定を確認して「変換する」を押してください。');
+        }
+
+        // 「変換する」ボタンの処理
+        document.getElementById('generateBtn').addEventListener('click', function() {
+            generateData();
+        });
+
+        // 指定された列からデータを生成
+        function generateData() {
+            const idxDate = parseInt(document.getElementById('col-date').value);
+            const idxSales = parseInt(document.getElementById('col-sales').value);
+            const idxFee = parseInt(document.getElementById('col-fee').value);
+            const idxMethod = parseInt(document.getElementById('col-method').value);
+            const idxMemo = parseInt(document.getElementById('col-memo').value);
+            
+            generatedData = [];
+            
+            const parseAmount = (val) => {
+                if (!val) return 0;
+                // ¥, カンマ, スペースを除去して数値化
+                const cleaned = val.replace(/[¥,\\\s]/g, '');
+                const num = parseInt(cleaned, 10);
+                return isNaN(num) ? 0 : num;
+            };
+            
+            for (let i = dataStartIndex; i < currentCSVLines.length; i++) {
+                const row = currentCSVLines[i];
+                if (row.length === 0 || (row.length === 1 && row[0].trim() === '')) continue;
                 
-                const salesAmount = parseAmount(rowData['総売上高']);
-                const feeAmount = parseAmount(rowData['手数料']);
+                const dateRaw = row[idxDate] ? row[idxDate].trim().replace(/^"|"$/g, '') : '';
+                // 日付記号(-や/)が含まれていない行は合計行などの可能性が高いのでスキップ
+                if (!dateRaw || (!dateRaw.includes('-') && !dateRaw.includes('/'))) continue;
                 
-                // 決済手段の推測
-                let paymentMethod = rowData['カード種別'] || rowData['電子マネー'] || rowData['PayPay'] || rowData['ソース'] || '';
-                if (rowData['PayPay'] && parseAmount(rowData['PayPay']) > 0) paymentMethod = 'PayPay';
+                const salesRaw = row[idxSales] ? row[idxSales].trim().replace(/^"|"$/g, '') : '';
+                const salesAmount = parseAmount(salesRaw);
                 
-                // 摘要の推測
-                let memo = rowData['レシート詳細'] || rowData['顧客名'] || '売上';
+                let feeAmount = 0;
+                if (idxFee !== -1) {
+                    const feeRaw = row[idxFee] ? row[idxFee].trim().replace(/^"|"$/g, '') : '';
+                    feeAmount = parseAmount(feeRaw);
+                }
+                
+                const method = idxMethod !== -1 && row[idxMethod] ? row[idxMethod].trim().replace(/^"|"$/g, '') : '';
+                let memo = idxMemo !== -1 && row[idxMemo] ? row[idxMemo].trim().replace(/^"|"$/g, '') : '';
                 if (!memo || memo === '""' || memo === '任意の金額') memo = '売上';
                 
-                // --- 売上の仕訳 ---
-                if (salesAmount > 0) {
+                // --- 売上の仕訳作成 ---
+                if (salesAmount !== 0) {
                     generatedData.push({
-                        date: date,
-                        account: '売上高',
-                        subAccount: 'Square',
-                        memo: memo,
-                        amount: salesAmount,
-                        method: paymentMethod,
+                        date: dateRaw,
+                        account: salesAmount > 0 ? '売上高' : '売上高(マイナス/返金)', // マイナス売上の場合
+                        subAccount: '決済代行',
+                        memo: salesAmount < 0 ? `[返金等] ${memo}` : memo,
+                        amount: salesAmount, // マイナスの場合はそのまま出力
+                        method: method,
                         taxType: '課税売上10%'
                     });
                 }
                 
-                // --- 手数料の仕訳 ---
-                if (feeAmount < 0) {
+                // --- 手数料の仕訳作成 ---
+                if (feeAmount !== 0) {
                     generatedData.push({
-                        date: date,
+                        date: dateRaw,
                         account: '支払手数料',
-                        subAccount: 'Square',
-                        memo: 'Square決済手数料',
-                        amount: Math.abs(feeAmount),
-                        method: paymentMethod,
-                        taxType: '対象外' // Squareの手数料は一般的に消費税対象外
+                        subAccount: '決済手数料',
+                        memo: '決済手数料',
+                        amount: Math.abs(feeAmount), // 手数料は絶対値(プラス)で計上
+                        method: method,
+                        taxType: '対象外'
                     });
                 }
             }
@@ -246,9 +365,10 @@
                 renderTable();
                 document.getElementById('tableWrapper').classList.remove('hidden');
                 document.getElementById('copyBtn').classList.remove('hidden');
+                document.getElementById('tableWrapper').scrollIntoView({ behavior: 'smooth', block: 'start' });
                 showToast(`変換完了！ ${generatedData.length}件の明細を作成しました。`);
             } else {
-                showToast('処理可能な取引データが見つかりませんでした。', true);
+                showToast('処理可能な取引データが見つかりませんでした。列の設定を見直してください。', true);
             }
         }
 
@@ -263,9 +383,9 @@
                 
                 tr.innerHTML = `
                     <td class="px-6 py-2">${row.date}</td>
-                    <td class="px-6 py-2 font-medium ${row.account === '売上高' ? 'text-blue-600' : 'text-red-600'}">${row.account}</td>
+                    <td class="px-6 py-2 font-medium ${row.account.includes('売上高') ? 'text-blue-600' : 'text-red-600'}">${row.account}</td>
                     <td class="px-6 py-2">${row.subAccount}</td>
-                    <td class="px-6 py-2">${row.memo}</td>
+                    <td class="px-6 py-2 truncate max-w-xs" title="${row.memo}">${row.memo}</td>
                     <td class="px-6 py-2 text-right">${row.amount.toLocaleString()}</td>
                     <td class="px-6 py-2">${row.method}</td>
                     <td class="px-6 py-2 text-xs text-gray-500">${row.taxType}</td>
@@ -286,7 +406,6 @@
                 tsv += `${row.date}\t${row.account}\t${row.subAccount}\t${row.memo}\t${row.amount}\t${row.method}\t${row.taxType}\n`;
             }
             
-            // コピー処理
             const textarea = document.createElement('textarea');
             textarea.value = tsv;
             textarea.style.position = 'fixed';
