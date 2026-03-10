@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Square仕訳データ変換ツール</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .table-container {
+            max-height: calc(100vh - 250px);
+            overflow-y: auto;
+        }
+        th {
+            position: sticky;
+            top: 0;
+            background-color: #f3f4f6;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800 font-sans min-h-screen flex flex-col items-center py-8">
+
+    <div class="w-full max-w-6xl px-4 flex flex-col gap-6">
+        
+        <!-- ヘッダー部分 -->
+        <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+            <h1 class="text-2xl font-bold mb-4 text-gray-800">Square取引データ 仕訳変換ツール</h1>
+            <p class="text-sm text-gray-600 mb-6">
+                お手元のSquareの取引履歴ファイル（CSV）を選択してください。<br>
+                売上と手数料をそれぞれの行に分け、確定申告用の項目に自動変換します。データはブラウザ上でのみ処理され、外部に送信されることはありません。
+            </p>
+            
+            <div class="flex flex-col sm:flex-row gap-4 items-center justify-between bg-gray-50 p-4 rounded-lg border border-gray-100">
+                <div class="flex items-center gap-4 w-full sm:w-auto">
+                    <input type="file" id="fileInput" accept=".csv" class="block w-full text-sm text-gray-500
+                        file:mr-4 file:py-2 file:px-4
+                        file:rounded-md file:border-0
+                        file:text-sm file:font-semibold
+                        file:bg-blue-50 file:text-blue-700
+                        hover:file:bg-blue-100 cursor-pointer" />
+                </div>
+
+                <div class="flex items-center gap-4 w-full sm:w-auto">
+                    <div class="text-sm text-gray-500 flex items-center gap-2">
+                        <span>文字コード:</span>
+                        <label class="cursor-pointer"><input type="radio" name="encoding" value="UTF-8" checked class="mr-1">UTF-8</label>
+                        <label class="cursor-pointer"><input type="radio" name="encoding" value="Shift_JIS" class="mr-1">Shift-JIS</label>
+                    </div>
+                    <button id="copyBtn" onclick="copyToClipboard()" class="hidden bg-blue-600 hover:bg-blue-700 text-white py-2 px-6 rounded-md font-medium transition-colors duration-200 flex items-center gap-2 whitespace-nowrap">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                        </svg>
+                        結果をコピー
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- テーブル部分 -->
+        <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hidden" id="tableWrapper">
+            <div class="table-container">
+                <table class="min-w-full text-sm text-left whitespace-nowrap">
+                    <thead class="text-gray-700 uppercase bg-gray-50 border-b">
+                        <tr>
+                            <th scope="col" class="px-6 py-3">日付</th>
+                            <th scope="col" class="px-6 py-3">勘定科目</th>
+                            <th scope="col" class="px-6 py-3">補助項目</th>
+                            <th scope="col" class="px-6 py-3">内容・摘要</th>
+                            <th scope="col" class="px-6 py-3 text-right">金額</th>
+                            <th scope="col" class="px-6 py-3">決済手段</th>
+                            <th scope="col" class="px-6 py-3">区分</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tableBody" class="divide-y divide-gray-200">
+                        <!-- データがここに挿入されます -->
+                    </tbody>
+                </table>
+            </div>
+            <div class="p-4 bg-gray-50 border-t text-sm text-gray-500 flex justify-between items-center">
+                <span id="recordCount">合計: 0件</span>
+                <span class="text-xs">※コピーボタンを押して、スプレッドシートのA1セルに貼り付けてください。</span>
+            </div>
+        </div>
+        
+    </div>
+
+    <!-- トースト通知 -->
+    <div id="toast" class="hidden fixed bottom-6 right-6 px-6 py-3 rounded shadow-lg transition-opacity text-white z-50"></div>
+
+    <script>
+        let generatedData = [];
+
+        // ファイル入力のイベントリスナー
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const encoding = document.querySelector('input[name="encoding"]:checked').value;
+            const reader = new FileReader();
+
+            reader.onload = function(event) {
+                const text = event.target.result;
+                processCSV(text);
+            };
+
+            reader.onerror = function() {
+                showToast('ファイルの読み込みに失敗しました。', true);
+            };
+
+            reader.readAsText(file, encoding);
+        });
+
+        // ラジオボタン変更時に再読み込みを促す
+        document.querySelectorAll('input[name="encoding"]').forEach(radio => {
+            radio.addEventListener('change', () => {
+                const fileInput = document.getElementById('fileInput');
+                if(fileInput.files.length > 0) {
+                    fileInput.dispatchEvent(new Event('change'));
+                }
+            });
+        });
+
+        // CSVパース処理
+        function parseCSV(text, delimiter) {
+            let result = [];
+            let row = [];
+            let inQuotes = false;
+            let current = '';
+            
+            for (let i = 0; i < text.length; i++) {
+                let char = text[i];
+                
+                if (inQuotes) {
+                    if (char === '"') {
+                        if (i + 1 < text.length && text[i + 1] === '"') {
+                            current += '"';
+                            i++;
+                        } else {
+                            inQuotes = false;
+                        }
+                    } else {
+                        current += char;
+                    }
+                } else {
+                    if (char === '"') {
+                        inQuotes = true;
+                    } else if (char === delimiter) {
+                        row.push(current);
+                        current = '';
+                    } else if (char === '\n' || char === '\r') {
+                        if (char === '\r' && i + 1 < text.length && text[i + 1] === '\n') {
+                            i++;
+                        }
+                        row.push(current);
+                        result.push(row);
+                        row = [];
+                        current = '';
+                    } else {
+                        current += char;
+                    }
+                }
+            }
+            if (current !== '') row.push(current);
+            if (row.length > 0) result.push(row);
+            return result;
+        }
+
+        // データの処理と仕訳作成
+        function processCSV(text) {
+            // Squareのデータはタブ区切りの場合とカンマ区切りの場合がある
+            const delimiter = text.includes('\t') ? '\t' : ',';
+            const lines = parseCSV(text, delimiter);
+            
+            let headerRowIndex = -1;
+            // ヘッダー行を探す（先頭15行以内にあると想定）
+            for (let i = 0; i < Math.min(15, lines.length); i++) {
+                const row = lines[i];
+                if (row.some(c => c.includes('日付')) && (row.some(c => c.includes('総売上高')) || row.some(c => c.includes('手数料')))) {
+                    headerRowIndex = i;
+                    break;
+                }
+            }
+            
+            if (headerRowIndex === -1) {
+                showToast('エラー: 適切なヘッダー項目(日付/総売上高等)が見つかりません。文字コードを変更してお試しください。', true);
+                return;
+            }
+            
+            const headers = lines[headerRowIndex].map(h => h.trim().replace(/^"|"$/g, ''));
+            generatedData = [];
+            
+            for (let i = headerRowIndex + 1; i < lines.length; i++) {
+                const row = lines[i];
+                if (row.length < headers.length * 0.5) continue; // 空行などはスキップ
+                
+                const rowData = {};
+                headers.forEach((h, idx) => {
+                    rowData[h] = (row[idx] || '').trim().replace(/^"|"$/g, '');
+                });
+                
+                const date = rowData['日付'] || rowData['Date'];
+                if (!date || !date.match(/^\d{4}-\d{2}-\d{2}$/)) continue; // 日付形式でない行は除外
+                
+                // 金額の数値化 (例: "¥6,000" -> 6000)
+                const parseAmount = (val) => parseInt((val || '0').replace(/[¥,\s]/g, ''), 10) || 0;
+                
+                const salesAmount = parseAmount(rowData['総売上高']);
+                const feeAmount = parseAmount(rowData['手数料']);
+                
+                // 決済手段の推測
+                let paymentMethod = rowData['カード種別'] || rowData['電子マネー'] || rowData['PayPay'] || rowData['ソース'] || '';
+                if (rowData['PayPay'] && parseAmount(rowData['PayPay']) > 0) paymentMethod = 'PayPay';
+                
+                // 摘要の推測
+                let memo = rowData['レシート詳細'] || rowData['顧客名'] || '売上';
+                if (!memo || memo === '""' || memo === '任意の金額') memo = '売上';
+                
+                // --- 売上の仕訳 ---
+                if (salesAmount > 0) {
+                    generatedData.push({
+                        date: date,
+                        account: '売上高',
+                        subAccount: 'Square',
+                        memo: memo,
+                        amount: salesAmount,
+                        method: paymentMethod,
+                        taxType: '課税売上10%'
+                    });
+                }
+                
+                // --- 手数料の仕訳 ---
+                if (feeAmount < 0) {
+                    generatedData.push({
+                        date: date,
+                        account: '支払手数料',
+                        subAccount: 'Square',
+                        memo: 'Square決済手数料',
+                        amount: Math.abs(feeAmount),
+                        method: paymentMethod,
+                        taxType: '対象外' // Squareの手数料は一般的に消費税対象外
+                    });
+                }
+            }
+            
+            if (generatedData.length > 0) {
+                renderTable();
+                document.getElementById('tableWrapper').classList.remove('hidden');
+                document.getElementById('copyBtn').classList.remove('hidden');
+                showToast(`変換完了！ ${generatedData.length}件の明細を作成しました。`);
+            } else {
+                showToast('処理可能な取引データが見つかりませんでした。', true);
+            }
+        }
+
+        // テーブルの描画
+        function renderTable() {
+            const tbody = document.getElementById('tableBody');
+            tbody.innerHTML = '';
+            
+            generatedData.forEach((row, index) => {
+                const tr = document.createElement('tr');
+                tr.className = index % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+                
+                tr.innerHTML = `
+                    <td class="px-6 py-2">${row.date}</td>
+                    <td class="px-6 py-2 font-medium ${row.account === '売上高' ? 'text-blue-600' : 'text-red-600'}">${row.account}</td>
+                    <td class="px-6 py-2">${row.subAccount}</td>
+                    <td class="px-6 py-2">${row.memo}</td>
+                    <td class="px-6 py-2 text-right">${row.amount.toLocaleString()}</td>
+                    <td class="px-6 py-2">${row.method}</td>
+                    <td class="px-6 py-2 text-xs text-gray-500">${row.taxType}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+            
+            document.getElementById('recordCount').textContent = `合計: ${generatedData.length} 行`;
+        }
+
+        // クリップボードにコピー
+        function copyToClipboard() {
+            if (generatedData.length === 0) return;
+            
+            // TSV（タブ区切り）形式で文字列を作成
+            let tsv = "日付\t勘定科目\t補助項目\t内容・摘要\t金額\t決済手段\t区分\n";
+            for(let row of generatedData) {
+                tsv += `${row.date}\t${row.account}\t${row.subAccount}\t${row.memo}\t${row.amount}\t${row.method}\t${row.taxType}\n`;
+            }
+            
+            // コピー処理
+            const textarea = document.createElement('textarea');
+            textarea.value = tsv;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = 0;
+            document.body.appendChild(textarea);
+            textarea.select();
+            
+            try {
+                document.execCommand('copy');
+                showToast('コピーしました！スプレッドシートのA1セルに貼り付けてください。');
+            } catch (err) {
+                showToast('コピーに失敗しました。', true);
+            } finally {
+                document.body.removeChild(textarea);
+            }
+        }
+
+        // トースト通知の表示
+        function showToast(message, isError = false) {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = `fixed bottom-6 right-6 px-6 py-3 rounded shadow-lg transition-opacity text-white z-50 ${isError ? 'bg-red-500' : 'bg-green-600'}`;
+            toast.classList.remove('hidden');
+            
+            setTimeout(() => {
+                toast.classList.add('opacity-0');
+                setTimeout(() => {
+                    toast.classList.add('hidden');
+                    toast.classList.remove('opacity-0');
+                }, 300);
+            }, 4000);
+        }
+    </script>
+</body>
+</html>
