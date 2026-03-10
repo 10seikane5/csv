@@ -1,443 +1,695 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>決済CSV 仕訳データ変換ツール</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        .table-container {
-            max-height: calc(100vh - 350px);
-            overflow-y: auto;
-        }
-        th {
-            position: sticky;
-            top: 0;
-            background-color: #f3f4f6;
-            z-index: 10;
-        }
-    </style>
-</head>
-<body class="bg-gray-50 text-gray-800 font-sans min-h-screen flex flex-col items-center py-8">
+import React, { useState, useEffect, useMemo } from 'react';
+import { 
+  LayoutDashboard, 
+  BookText, 
+  FileUp, 
+  Settings, 
+  Plus, 
+  Trash2, 
+  Download, 
+  TrendingUp, 
+  TrendingDown, 
+  AlertCircle,
+  Calendar,
+  Wallet,
+  CheckCircle2,
+  FileSpreadsheet,
+  Camera,
+  Loader2
+} from 'lucide-react';
 
-    <div class="w-full max-w-6xl px-4 flex flex-col gap-6">
-        
-        <!-- ヘッダー部分 -->
-        <div class="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-            <h1 class="text-2xl font-bold mb-4 text-gray-800">決済CSV 仕訳データ変換ツール (Square, Airペイ等)</h1>
-            <p class="text-sm text-gray-600 mb-6">
-                お手元の取引履歴ファイル（CSV）を選択してください。<br>
-                Square以外のファイルでも、読み込みたい列を自由に指定することで、売上と手数料を分けた確定申告用のフォーマットに変換できます。
-            </p>
-            
-            <div class="flex flex-col sm:flex-row gap-4 items-center justify-between bg-gray-50 p-4 rounded-lg border border-gray-100">
-                <div class="flex items-center gap-4 w-full sm:w-auto">
-                    <input type="file" id="fileInput" accept=".csv" class="block w-full text-sm text-gray-500
-                        file:mr-4 file:py-2 file:px-4
-                        file:rounded-md file:border-0
-                        file:text-sm file:font-semibold
-                        file:bg-blue-50 file:text-blue-700
-                        hover:file:bg-blue-100 cursor-pointer" />
-                </div>
+// --- マスターデータ ---
+const INCOME_CATEGORIES = ['売上高', '雑収入'];
+const EXPENSE_CATEGORIES = [
+  '仕入高', '支払手数料', '消耗品費', '旅費交通費', '通信費', 
+  '水道光熱費', '地代家賃', '接待交際費', '広告宣伝費', 
+  '外注工賃', '租税公課', '荷造運賃', '雑費'
+];
+// 事業主借＝個人の財布から払った、普通預金＝事業用口座、等
+const PAYMENT_METHODS = ['現金', '普通預金', '事業主借（個人財布）', 'クレジットカード', 'Square', 'PayPay', 'その他'];
 
-                <div class="flex items-center gap-4 w-full sm:w-auto">
-                    <div class="text-sm text-gray-500 flex items-center gap-2">
-                        <span>文字コード:</span>
-                        <label class="cursor-pointer"><input type="radio" name="encoding" value="UTF-8" checked class="mr-1">UTF-8</label>
-                        <label class="cursor-pointer"><input type="radio" name="encoding" value="Shift_JIS" class="mr-1">Shift-JIS</label>
-                    </div>
-                    <button id="copyBtn" onclick="copyToClipboard()" class="hidden bg-blue-600 hover:bg-blue-700 text-white py-2 px-6 rounded-md font-medium transition-colors duration-200 flex items-center gap-2 whitespace-nowrap">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
-                        </svg>
-                        結果をコピー
-                    </button>
-                </div>
-            </div>
+export default function App() {
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [transactions, setTransactions] = useState([]);
+  const [toast, setToast] = useState(null);
+
+  // ローカルストレージからデータ読み込み
+  useEffect(() => {
+    const saved = localStorage.getItem('my_accounting_data_v1');
+    if (saved) {
+      try {
+        setTransactions(JSON.parse(saved));
+      } catch (e) {
+        console.error("データの読み込みに失敗しました", e);
+      }
+    }
+  }, []);
+
+  // ローカルストレージへデータ保存
+  useEffect(() => {
+    localStorage.setItem('my_accounting_data_v1', JSON.stringify(transactions));
+  }, [transactions]);
+
+  const showToast = (msg, type = 'success') => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3000);
+  };
+
+  const addTransaction = (tx) => {
+    setTransactions(prev => [...prev, { ...tx, id: crypto.randomUUID(), createdAt: new Date().toISOString() }]);
+    showToast('取引を登録しました');
+  };
+
+  const deleteTransaction = (id) => {
+    if (confirm('この取引を削除してもよろしいですか？')) {
+      setTransactions(prev => prev.filter(t => t.id !== id));
+      showToast('削除しました');
+    }
+  };
+
+  return (
+    <div className="flex h-screen bg-gray-50 text-gray-800 font-sans overflow-hidden">
+      
+      {/* 💻 サイドバー (Desktop) */}
+      <aside className="hidden md:flex flex-col w-64 bg-white border-r border-gray-200">
+        <div className="p-6">
+          <h1 className="text-xl font-bold text-blue-700 flex items-center gap-2">
+            <BookText className="w-6 h-6" />
+            スマート帳簿
+          </h1>
+          <p className="text-xs text-gray-500 mt-1">個人事業主・確定申告向け</p>
+        </div>
+        <nav className="flex-1 px-4 space-y-2">
+          <NavButton icon={LayoutDashboard} label="ダッシュボード" isActive={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
+          <NavButton icon={BookText} label="帳簿・取引入力" isActive={activeTab === 'ledger'} onClick={() => setActiveTab('ledger')} />
+          <NavButton icon={FileUp} label="CSV一括取込" isActive={activeTab === 'import'} onClick={() => setActiveTab('import')} />
+          <NavButton icon={Settings} label="データ出力・設定" isActive={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
+        </nav>
+      </aside>
+
+      {/* メインコンテンツ領域 */}
+      <main className="flex-1 flex flex-col h-full overflow-hidden relative">
+        {/* モバイルヘッダー */}
+        <header className="md:hidden bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between z-10">
+          <h1 className="text-lg font-bold text-blue-700 flex items-center gap-2">
+            <BookText className="w-5 h-5" /> スマート帳簿
+          </h1>
+        </header>
+
+        <div className="flex-1 overflow-y-auto p-4 md:p-8 pb-24 md:pb-8">
+          {activeTab === 'dashboard' && <Dashboard transactions={transactions} />}
+          {activeTab === 'ledger' && <Ledger transactions={transactions} onAdd={addTransaction} onDelete={deleteTransaction} />}
+          {activeTab === 'import' && <CsvImport onImport={(data) => { setTransactions(prev => [...prev, ...data]); showToast(`${data.length}件のデータを取り込みました`); setActiveTab('ledger'); }} />}
+          {activeTab === 'settings' && <SettingsView transactions={transactions} onClearAll={() => { if(confirm('本当に全データを消去しますか？復旧できません。')) { setTransactions([]); showToast('データを初期化しました'); } }} />}
         </div>
 
-        <!-- マッピング設定セクション（ファイル読み込み後に表示） -->
-        <div id="mappingSection" class="bg-white p-6 rounded-xl shadow-sm border border-gray-200 hidden border-t-4 border-t-blue-500">
-            <h2 class="text-lg font-bold mb-2 text-gray-800">列の割り当て（マッピング）設定</h2>
-            <p class="text-sm text-gray-600 mb-5">
-                CSVの列名を自動認識しました。各項目として読み込む列が正しいか確認し、違っている場合は手動で変更してください。
-            </p>
-            
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 bg-gray-50 p-4 rounded-lg">
-                <div>
-                    <label class="block text-sm font-bold text-gray-700 mb-1">📅 日付 <span class="text-red-500">*</span></label>
-                    <select id="col-date" class="w-full border border-gray-300 rounded-md py-2 px-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></select>
-                </div>
-                <div>
-                    <label class="block text-sm font-bold text-gray-700 mb-1">💰 売上（金額） <span class="text-red-500">*</span></label>
-                    <select id="col-sales" class="w-full border border-gray-300 rounded-md py-2 px-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></select>
-                </div>
-                <div>
-                    <label class="block text-sm font-bold text-gray-700 mb-1">💸 手数料</label>
-                    <select id="col-fee" class="w-full border border-gray-300 rounded-md py-2 px-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></select>
-                </div>
-                <div>
-                    <label class="block text-sm font-bold text-gray-700 mb-1">💳 決済手段</label>
-                    <select id="col-method" class="w-full border border-gray-300 rounded-md py-2 px-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></select>
-                </div>
-                <div>
-                    <label class="block text-sm font-bold text-gray-700 mb-1">📝 摘要・内容</label>
-                    <select id="col-memo" class="w-full border border-gray-300 rounded-md py-2 px-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></select>
-                </div>
-            </div>
-            
-            <div class="mt-5 flex justify-end">
-                <button id="generateBtn" class="bg-green-600 hover:bg-green-700 text-white py-2 px-8 rounded-md font-bold transition-colors duration-200 shadow-sm">
-                    この設定でデータを変換する
-                </button>
-            </div>
-        </div>
+        {/* トースト通知 */}
+        {toast && (
+          <div className={`absolute top-6 right-6 px-6 py-3 rounded-lg shadow-lg text-white font-medium flex items-center gap-2 z-50 transition-all ${toast.type === 'error' ? 'bg-red-500' : 'bg-green-600'}`}>
+            {toast.type === 'error' ? <AlertCircle className="w-5 h-5" /> : <CheckCircle2 className="w-5 h-5" />}
+            {toast.msg}
+          </div>
+        )}
+      </main>
 
-        <!-- テーブル部分 -->
-        <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden hidden" id="tableWrapper">
-            <div class="table-container">
-                <table class="min-w-full text-sm text-left whitespace-nowrap">
-                    <thead class="text-gray-700 uppercase bg-gray-50 border-b">
-                        <tr>
-                            <th scope="col" class="px-6 py-3">日付</th>
-                            <th scope="col" class="px-6 py-3">勘定科目</th>
-                            <th scope="col" class="px-6 py-3">補助項目</th>
-                            <th scope="col" class="px-6 py-3">内容・摘要</th>
-                            <th scope="col" class="px-6 py-3 text-right">金額</th>
-                            <th scope="col" class="px-6 py-3">決済手段</th>
-                            <th scope="col" class="px-6 py-3">区分</th>
-                        </tr>
-                    </thead>
-                    <tbody id="tableBody" class="divide-y divide-gray-200">
-                        <!-- データがここに挿入されます -->
-                    </tbody>
-                </table>
-            </div>
-            <div class="p-4 bg-gray-50 border-t text-sm text-gray-500 flex justify-between items-center">
-                <span id="recordCount">合計: 0件</span>
-                <span class="text-xs font-bold text-blue-600">※上部の「結果をコピー」ボタンを押して、スプレッドシートのA1セルに貼り付けてください。</span>
-            </div>
-        </div>
-        
+      {/* 📱 ボトムナビゲーション (Mobile) */}
+      <nav className="md:hidden fixed bottom-0 w-full bg-white border-t border-gray-200 flex justify-around pb-safe z-20">
+        <MobileNavButton icon={LayoutDashboard} label="ホーム" isActive={activeTab === 'dashboard'} onClick={() => setActiveTab('dashboard')} />
+        <MobileNavButton icon={BookText} label="帳簿" isActive={activeTab === 'ledger'} onClick={() => setActiveTab('ledger')} />
+        <MobileNavButton icon={FileUp} label="取込" isActive={activeTab === 'import'} onClick={() => setActiveTab('import')} />
+        <MobileNavButton icon={Settings} label="設定" isActive={activeTab === 'settings'} onClick={() => setActiveTab('settings')} />
+      </nav>
     </div>
+  );
+}
 
-    <!-- トースト通知 -->
-    <div id="toast" class="hidden fixed bottom-6 right-6 px-6 py-3 rounded shadow-lg transition-opacity text-white z-50"></div>
+// --- Components ---
 
-    <script>
-        let currentCSVLines = [];
-        let dataStartIndex = 0;
-        let generatedData = [];
+function NavButton({ icon: Icon, label, isActive, onClick }) {
+  return (
+    <button 
+      onClick={onClick}
+      className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg font-medium transition-colors ${isActive ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'}`}
+    >
+      <Icon className={`w-5 h-5 ${isActive ? 'text-blue-700' : 'text-gray-400'}`} />
+      {label}
+    </button>
+  );
+}
 
-        // ファイル入力のイベントリスナー
-        document.getElementById('fileInput').addEventListener('change', function(e) {
-            const file = e.target.files[0];
-            if (!file) return;
+function MobileNavButton({ icon: Icon, label, isActive, onClick }) {
+  return (
+    <button onClick={onClick} className={`flex flex-col items-center py-3 px-2 flex-1 ${isActive ? 'text-blue-700' : 'text-gray-500'}`}>
+      <Icon className="w-5 h-5 mb-1" />
+      <span className="text-[10px] font-medium">{label}</span>
+    </button>
+  );
+}
 
-            const encoding = document.querySelector('input[name="encoding"]:checked').value;
-            const reader = new FileReader();
+// 📊 ダッシュボード
+function Dashboard({ transactions }) {
+  const currentYear = new Date().getFullYear();
+  
+  // 今年のデータに絞る
+  const yearlyTx = transactions.filter(t => t.date.startsWith(currentYear.toString()));
+  
+  const totalIncome = yearlyTx.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
+  const totalExpense = yearlyTx.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
+  const profit = totalIncome - totalExpense;
 
-            reader.onload = function(event) {
-                const text = event.target.result;
-                analyzeCSV(text);
-            };
+  // 月別集計
+  const monthlyData = Array.from({ length: 12 }, (_, i) => ({ month: i + 1, income: 0, expense: 0 }));
+  yearlyTx.forEach(t => {
+    const m = parseInt(t.date.split('-')[1], 10) - 1; // 0-11
+    if (t.type === 'income') monthlyData[m].income += t.amount;
+    else monthlyData[m].expense += t.amount;
+  });
 
-            reader.onerror = function() {
-                showToast('ファイルの読み込みに失敗しました。', true);
-            };
+  const maxAmount = Math.max(...monthlyData.map(d => Math.max(d.income, d.expense))) || 1;
 
-            reader.readAsText(file, encoding);
+  return (
+    <div className="space-y-6">
+      <h2 className="text-2xl font-bold text-gray-800">{currentYear}年 業績サマリー</h2>
+      
+      {/* KPIカード */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm flex flex-col">
+          <span className="text-gray-500 text-sm font-medium flex items-center gap-1"><TrendingUp className="w-4 h-4 text-blue-500" /> 売上・収入合計</span>
+          <span className="text-3xl font-bold text-gray-900 mt-2">¥{totalIncome.toLocaleString()}</span>
+        </div>
+        <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm flex flex-col">
+          <span className="text-gray-500 text-sm font-medium flex items-center gap-1"><TrendingDown className="w-4 h-4 text-red-500" /> 経費合計</span>
+          <span className="text-3xl font-bold text-gray-900 mt-2">¥{totalExpense.toLocaleString()}</span>
+        </div>
+        <div className={`p-6 rounded-xl border shadow-sm flex flex-col ${profit >= 0 ? 'bg-blue-50 border-blue-100' : 'bg-red-50 border-red-100'}`}>
+          <span className="text-gray-600 text-sm font-medium flex items-center gap-1"><Wallet className="w-4 h-4" /> 差引利益</span>
+          <span className={`text-3xl font-bold mt-2 ${profit >= 0 ? 'text-blue-700' : 'text-red-700'}`}>
+            ¥{profit.toLocaleString()}
+          </span>
+        </div>
+      </div>
+
+      {/* グラフ */}
+      <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm">
+        <h3 className="text-lg font-bold text-gray-800 mb-6">月別推移 (青色申告決算書ベース)</h3>
+        <div className="h-64 flex items-end justify-between gap-2 border-b border-gray-200 pb-2">
+          {monthlyData.map(d => (
+            <div key={d.month} className="flex-1 flex flex-col justify-end items-center gap-1 group relative h-full">
+              {/* ツールチップ */}
+              <div className="opacity-0 group-hover:opacity-100 absolute -top-12 bg-gray-800 text-white text-xs p-2 rounded pointer-events-none whitespace-nowrap z-10 transition-opacity">
+                売上: ¥{d.income.toLocaleString()}<br/>
+                経費: ¥{d.expense.toLocaleString()}
+              </div>
+              
+              <div className="w-full flex justify-center gap-1 h-full items-end">
+                <div className="w-1/3 bg-blue-400 rounded-t-sm" style={{ height: `${(d.income / maxAmount) * 100}%`, minHeight: d.income > 0 ? '4px' : '0' }}></div>
+                <div className="w-1/3 bg-red-400 rounded-t-sm" style={{ height: `${(d.expense / maxAmount) * 100}%`, minHeight: d.expense > 0 ? '4px' : '0' }}></div>
+              </div>
+              <span className="text-xs text-gray-500 font-medium mt-2">{d.month}月</span>
+            </div>
+          ))}
+        </div>
+        <div className="flex justify-center gap-6 mt-4 text-sm text-gray-600">
+          <span className="flex items-center gap-2"><div className="w-3 h-3 bg-blue-400 rounded-sm"></div>収入</span>
+          <span className="flex items-center gap-2"><div className="w-3 h-3 bg-red-400 rounded-sm"></div>経費</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 📝 帳簿・入力
+function Ledger({ transactions, onAdd, onDelete }) {
+  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [type, setType] = useState('expense');
+  const [account, setAccount] = useState('消耗品費');
+  const [amount, setAmount] = useState('');
+  const [method, setMethod] = useState('事業主借（個人財布）');
+  const [memo, setMemo] = useState('');
+  
+  // レシート読み取り用のStateとRefを追加
+  const [isScanning, setIsScanning] = useState(false);
+  const fileInputRef = React.useRef(null);
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!amount || isNaN(amount) || amount <= 0) return alert('正しい金額を入力してください');
+    
+    onAdd({
+      date, type, account, amount: parseInt(amount, 10), method, memo
+    });
+    
+    setAmount('');
+    setMemo('');
+    // Focus back to amount or memo if needed
+  };
+
+  // 画像・動画ファイルからBase64形式の画像を抽出する処理
+  const processMediaFile = (file) => {
+    return new Promise((resolve, reject) => {
+      // 動画の場合：1秒時点のフレームを切り出して解析
+      if (file.type.startsWith('video/')) {
+        const video = document.createElement('video');
+        video.preload = 'metadata';
+        video.src = URL.createObjectURL(file);
+        video.muted = true;
+        video.playsInline = true;
+        video.onloadeddata = () => { video.currentTime = Math.min(1, video.duration / 2); };
+        video.onseeked = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/jpeg', 0.8));
+          URL.revokeObjectURL(video.src);
+        };
+        video.onerror = reject;
+      } else {
+        // 画像の場合：サイズを縮小して高速化
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const MAX_WIDTH = 1024;
+          let width = img.width;
+          let height = img.height;
+          if (width > MAX_WIDTH) {
+            height = Math.round((height * MAX_WIDTH) / width);
+            width = MAX_WIDTH;
+          }
+          canvas.width = width;
+          canvas.height = height;
+          canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+          resolve(canvas.toDataURL('image/jpeg', 0.8));
+          URL.revokeObjectURL(img.src);
+        };
+        img.onerror = reject;
+        img.src = URL.createObjectURL(file);
+      }
+    });
+  };
+
+  // Gemini APIでレシート画像を解析する
+  const handleScanReceipt = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    setIsScanning(true);
+    try {
+      const dataUrl = await processMediaFile(file);
+      const base64Data = dataUrl.split(',')[1];
+      
+      const apiKey = ""; // 実行環境によって自動付与されます
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+
+      const payload = {
+        contents: [{
+          role: "user",
+          parts: [
+            { text: "このレシート画像から情報を抽出してください。日付(date: YYYY-MM-DD)、合計金額(amount: 数値)、店名や品名(memo: 文字列)。" },
+            { inlineData: { mimeType: "image/jpeg", data: base64Data } }
+          ]
+        }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "OBJECT",
+            properties: {
+              date: { type: "STRING" },
+              amount: { type: "INTEGER" },
+              memo: { type: "STRING" }
+            }
+          }
+        }
+      };
+
+      // API呼び出し (リトライ機能付き)
+      let result = null;
+      let delay = 1000;
+      for (let i = 0; i < 5; i++) {
+        try {
+          const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          if (!res.ok) throw new Error('API Error');
+          result = await res.json();
+          break;
+        } catch (error) {
+          if (i === 4) throw error;
+          await new Promise(r => setTimeout(r, delay));
+          delay *= 2;
+        }
+      }
+
+      const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (text) {
+        const parsed = JSON.parse(text);
+        if (parsed.date && parsed.date.match(/^\d{4}-\d{2}-\d{2}$/)) setDate(parsed.date);
+        if (parsed.amount) setAmount(parsed.amount);
+        if (parsed.memo) setMemo(parsed.memo);
+        
+        setType('expense');
+        setAccount('消耗品費'); // 一旦デフォルトで消耗品費にセット
+        alert('レシートを読み込みました！内容を確認して「登録する」を押してください。');
+      }
+    } catch (error) {
+      console.error(error);
+      alert('レシートの読み込みに失敗しました。');
+    } finally {
+      setIsScanning(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  // 表示用に日付の新しい順にソート
+  const sortedTx = [...transactions].sort((a, b) => b.date.localeCompare(a.date) || b.createdAt.localeCompare(a.createdAt));
+
+  return (
+    <div className="flex flex-col lg:flex-row gap-6">
+      {/* 入力フォーム */}
+      <div className="w-full lg:w-1/3 bg-white p-6 rounded-xl border border-gray-100 shadow-sm h-fit sticky top-0">
+        <h2 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+          <Plus className="w-5 h-5 text-blue-600" /> かんたん取引入力
+        </h2>
+
+        {/* AIレシート読み取りボタン */}
+        <div className="mb-5">
+          <input 
+            type="file" 
+            accept="image/*,video/*" 
+            capture="environment" 
+            className="hidden" 
+            ref={fileInputRef} 
+            onChange={handleScanReceipt} 
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={isScanning}
+            className={`w-full flex items-center justify-center gap-2 border font-bold py-2.5 rounded-lg transition-colors text-sm ${isScanning ? 'bg-gray-50 text-gray-400 border-gray-200 cursor-not-allowed' : 'bg-gradient-to-r from-blue-50 to-indigo-50 border-blue-200 text-blue-700 hover:bg-blue-100 shadow-sm'}`}
+          >
+            {isScanning ? <Loader2 className="w-5 h-5 animate-spin" /> : <Camera className="w-5 h-5" />}
+            {isScanning ? 'AIがレシートを解析中...' : '📸 写真・動画から自動入力'}
+          </button>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          
+          <div className="flex bg-gray-100 p-1 rounded-lg">
+            <button type="button" onClick={() => { setType('expense'); setAccount('消耗品費'); }} className={`flex-1 py-2 text-sm font-bold rounded-md transition-all ${type === 'expense' ? 'bg-white shadow-sm text-red-600' : 'text-gray-500'}`}>支出 (経費)</button>
+            <button type="button" onClick={() => { setType('income'); setAccount('売上高'); }} className={`flex-1 py-2 text-sm font-bold rounded-md transition-all ${type === 'income' ? 'bg-white shadow-sm text-blue-600' : 'text-gray-500'}`}>収入 (売上)</button>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-gray-600 mb-1">日付</label>
+            <input type="date" required value={date} onChange={e => setDate(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-bold text-gray-600 mb-1">勘定科目</label>
+              <select value={account} onChange={e => setAccount(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none text-sm">
+                {(type === 'income' ? INCOME_CATEGORIES : EXPENSE_CATEGORIES).map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-bold text-gray-600 mb-1">決済手段</label>
+              <select value={method} onChange={e => setMethod(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none text-sm">
+                {PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-gray-600 mb-1">金額 (税込)</label>
+            <div className="relative">
+              <span className="absolute left-3 top-2.5 text-gray-500 font-medium">¥</span>
+              <input type="number" required min="1" value={amount} onChange={e => setAmount(e.target.value)} className="w-full p-2 pl-8 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none font-bold text-lg" placeholder="0" />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-gray-600 mb-1">摘要 (店舗名や品物)</label>
+            <input type="text" value={memo} onChange={e => setMemo(e.target.value)} className="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none text-sm" placeholder="例: Amazon 事務用品" />
+          </div>
+
+          <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg shadow-sm transition-colors mt-2">
+            登録する
+          </button>
+        </form>
+      </div>
+
+      {/* 一覧 */}
+      <div className="w-full lg:w-2/3 bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden flex flex-col">
+        <div className="p-4 border-b border-gray-100 bg-gray-50">
+          <h2 className="text-lg font-bold text-gray-800">帳簿データ一覧</h2>
+        </div>
+        <div className="overflow-x-auto flex-1">
+          <table className="w-full text-sm text-left whitespace-nowrap">
+            <thead className="text-gray-500 bg-white border-b sticky top-0">
+              <tr>
+                <th className="px-4 py-3 font-medium">日付</th>
+                <th className="px-4 py-3 font-medium">科目</th>
+                <th className="px-4 py-3 font-medium">摘要</th>
+                <th className="px-4 py-3 font-medium text-right">金額</th>
+                <th className="px-4 py-3 font-medium">手段</th>
+                <th className="px-4 py-3 font-medium text-center">操作</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {sortedTx.length === 0 ? (
+                <tr>
+                  <td colSpan="6" className="px-4 py-8 text-center text-gray-400">データがありません。左のフォームから追加してください。</td>
+                </tr>
+              ) : (
+                sortedTx.map(t => (
+                  <tr key={t.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-4 py-3 text-gray-600">{t.date}</td>
+                    <td className={`px-4 py-3 font-bold ${t.type === 'income' ? 'text-blue-600' : 'text-red-600'}`}>
+                      <span className={`px-2 py-1 rounded-full text-xs bg-${t.type === 'income' ? 'blue' : 'red'}-50`}>{t.account}</span>
+                    </td>
+                    <td className="px-4 py-3 text-gray-800 truncate max-w-[150px]">{t.memo || '-'}</td>
+                    <td className="px-4 py-3 text-right font-bold text-gray-900">¥{t.amount.toLocaleString()}</td>
+                    <td className="px-4 py-3 text-gray-500 text-xs">{t.method}</td>
+                    <td className="px-4 py-3 text-center">
+                      <button onClick={() => onDelete(t.id)} className="text-gray-400 hover:text-red-500 transition-colors p-1">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 📥 CSV取込 (前回のツールの進化版)
+function CsvImport({ onImport }) {
+  const [csvLines, setCsvLines] = useState([]);
+  const [headers, setHeaders] = useState([]);
+  const [mapping, setMapping] = useState({ date: -1, sales: -1, fee: -1, method: -1, memo: -1 });
+
+  const handleFile = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => analyzeCSV(event.target.result);
+    // 日本語CSV対応のためShift-JISで一旦読む（UTF-8でも英数字は読める）
+    // 汎用性のために、まずはUTF-8でトライ
+    reader.readAsText(file, 'UTF-8');
+  };
+
+  const analyzeCSV = (text) => {
+    // 簡易パース
+    const delimiter = text.includes('\t') ? '\t' : ',';
+    const lines = text.split(/\r?\n/).map(line => {
+      // 簡易的なCSVパース (今回は引用符処理を簡略化してスピード重視)
+      return line.split(delimiter).map(cell => cell.replace(/^"|"$/g, '').trim());
+    });
+
+    let headerIdx = -1;
+    let maxCols = 0;
+    for (let i = 0; i < Math.min(10, lines.length); i++) {
+      const cols = lines[i].filter(c => c).length;
+      if (cols > maxCols && cols > 2) { maxCols = cols; headerIdx = i; }
+    }
+
+    if (headerIdx === -1) return alert('有効なデータが見つかりません');
+
+    const h = lines[headerIdx];
+    setHeaders(h);
+    setCsvLines(lines.slice(headerIdx + 1));
+
+    // 自動マッピング推測
+    const findIdx = (keywords) => h.findIndex(col => keywords.some(kw => col.toLowerCase().includes(kw)));
+    
+    setMapping({
+      date: findIdx(['日付', 'date']),
+      sales: findIdx(['総売上高', '売上', '金額', '入金']),
+      fee: findIdx(['手数料']),
+      method: findIdx(['カード種別', '決済手段', 'ソース', '電子マネー']),
+      memo: findIdx(['レシート詳細', '顧客名', '摘要', '内容'])
+    });
+  };
+
+  const executeImport = () => {
+    if (mapping.date === -1 || mapping.sales === -1) return alert('日付と売上(金額)の列は必須です');
+
+    const newData = [];
+    const parseAmt = val => parseInt((val || '0').replace(/[¥,\\\s]/g, ''), 10) || 0;
+
+    csvLines.forEach(row => {
+      if (row.length < 2 || !row[mapping.date]) return;
+      const date = row[mapping.date].replace(/\//g, '-');
+      if (!date.match(/\d{4}-\d{1,2}-\d{1,2}/)) return; // 日付っぽくない行スキップ
+
+      const sales = parseAmt(row[mapping.sales]);
+      const fee = mapping.fee !== -1 ? parseAmt(row[mapping.fee]) : 0;
+      const method = mapping.method !== -1 ? (row[mapping.method] || 'Square') : '自動取込';
+      const memo = mapping.memo !== -1 ? (row[mapping.memo] || '売上') : '売上';
+
+      // 売上の登録
+      if (sales !== 0) {
+        newData.push({
+          id: crypto.randomUUID(),
+          createdAt: new Date().toISOString(),
+          date,
+          type: sales > 0 ? 'income' : 'expense', // マイナス売上は経費扱いにするかマイナス収入にするか。今回はシステム上マイナス収入で処理
+          account: '売上高',
+          amount: sales, // そのまま
+          method,
+          memo: sales < 0 ? `[返金] ${memo}` : memo
         });
+      }
 
-        // ラジオボタン変更時に再読み込みを促す
-        document.querySelectorAll('input[name="encoding"]').forEach(radio => {
-            radio.addEventListener('change', () => {
-                const fileInput = document.getElementById('fileInput');
-                if(fileInput.files.length > 0) {
-                    fileInput.dispatchEvent(new Event('change'));
-                }
-            });
+      // 手数料の登録（Square等はマイナス表記で来るので絶対値にする）
+      if (fee !== 0) {
+        newData.push({
+          id: crypto.randomUUID(),
+          createdAt: new Date().toISOString(),
+          date,
+          type: 'expense',
+          account: '支払手数料',
+          amount: Math.abs(fee),
+          method,
+          memo: '決済手数料'
         });
+      }
+    });
 
-        // CSVパース処理
-        function parseCSV(text, delimiter) {
-            let result = [];
-            let row = [];
-            let inQuotes = false;
-            let current = '';
-            
-            for (let i = 0; i < text.length; i++) {
-                let char = text[i];
-                if (inQuotes) {
-                    if (char === '"') {
-                        if (i + 1 < text.length && text[i + 1] === '"') {
-                            current += '"';
-                            i++;
-                        } else {
-                            inQuotes = false;
-                        }
-                    } else {
-                        current += char;
-                    }
-                } else {
-                    if (char === '"') {
-                        inQuotes = true;
-                    } else if (char === delimiter) {
-                        row.push(current);
-                        current = '';
-                    } else if (char === '\n' || char === '\r') {
-                        if (char === '\r' && i + 1 < text.length && text[i + 1] === '\n') {
-                            i++;
-                        }
-                        row.push(current);
-                        result.push(row);
-                        row = [];
-                        current = '';
-                    } else {
-                        current += char;
-                    }
-                }
-            }
-            if (current !== '') row.push(current);
-            if (row.length > 0) result.push(row);
-            return result;
-        }
+    if (newData.length > 0) {
+      onImport(newData);
+      setHeaders([]); // リセット
+    } else {
+      alert('取り込めるデータがありませんでした');
+    }
+  };
 
-        // CSVの解析とマッピングUIの表示
-        function analyzeCSV(text) {
-            const delimiter = text.includes('\t') ? '\t' : ',';
-            currentCSVLines = parseCSV(text, delimiter);
-            
-            // ヘッダー行を探す（先頭10行の中で、列数が一番多い行をヘッダーと仮定）
-            let maxCols = 0;
-            let headerIndex = -1;
-            for (let i = 0; i < Math.min(10, currentCSVLines.length); i++) {
-                const row = currentCSVLines[i];
-                const validCols = row.filter(c => c.trim() !== '').length;
-                if (validCols > maxCols && validCols > 2) {
-                    maxCols = validCols;
-                    headerIndex = i;
-                }
-            }
-            
-            if (headerIndex === -1) {
-                showToast('エラー: 有効なCSVデータが見つかりません。', true);
-                return;
-            }
-            
-            const headers = currentCSVLines[headerIndex].map(h => h.trim().replace(/^"|"$/g, ''));
-            dataStartIndex = headerIndex + 1;
-            
-            setupMappingUI(headers);
-        }
+  return (
+    <div className="max-w-4xl mx-auto space-y-6">
+      <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm text-center py-12">
+        <FileSpreadsheet className="w-12 h-12 text-blue-300 mx-auto mb-4" />
+        <h2 className="text-xl font-bold text-gray-800 mb-2">決済CSVの一括取り込み</h2>
+        <p className="text-sm text-gray-500 mb-6">Square、Airペイ等の明細ファイルをアップロードして、売上と手数料を自動で帳簿に分割登録します。</p>
+        
+        <label className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-lg font-bold cursor-pointer transition-colors inline-block shadow-sm">
+          CSVファイルを選択
+          <input type="file" accept=".csv" className="hidden" onChange={handleFile} />
+        </label>
+      </div>
 
-        // マッピングUIの構築
-        function setupMappingUI(headers) {
-            const selects = ['date', 'sales', 'fee', 'method', 'memo'];
-            
-            // 各項目に対する推測キーワード
-            const keywords = {
-                'date': ['日付', 'date', '取引日', '利用日', '発生日', 'お取引日'],
-                'sales': ['総売上高', '売上', '入金', '金額', 'お取引金額', '取引金額', '決済金額', '売上金額'],
-                'fee': ['手数料', '決済手数料'],
-                'method': ['カード種別', '決済手段', '決済方法', '支払方法', 'ソース', 'チャネル', 'ブランド', '電子マネー'],
-                'memo': ['レシート詳細', '顧客名', '摘要', '内容', '品名', 'メモ', '詳細', '商品']
-            };
-            
-            selects.forEach(key => {
-                const sel = document.getElementById(`col-${key}`);
-                sel.innerHTML = ''; // リセット
-                
-                // 手数料、手段、摘要は「なし」を選択可能に
-                if (key === 'fee' || key === 'method' || key === 'memo') {
-                    const opt = document.createElement('option');
-                    opt.value = '-1';
-                    opt.textContent = '（この項目は使用しない）';
-                    sel.appendChild(opt);
-                }
-                
-                headers.forEach((h, idx) => {
-                    const opt = document.createElement('option');
-                    opt.value = idx;
-                    opt.textContent = h ? `${h} (列${idx + 1})` : `(列${idx + 1})`;
-                    sel.appendChild(opt);
-                });
-                
-                // キーワードに基づいて自動選択
-                let selectedIndex = -1;
-                for (let kw of keywords[key]) {
-                    const idx = headers.findIndex(h => h && h.toLowerCase().includes(kw.toLowerCase()));
-                    if (idx !== -1) {
-                        selectedIndex = idx;
-                        break;
-                    }
-                }
-                
-                if (selectedIndex !== -1) {
-                    sel.value = selectedIndex;
-                } else if (key === 'date' && headers.length > 0) {
-                    sel.value = 0; // わからなければ先頭列
-                } else if (key === 'sales' && headers.length > 1) {
-                    sel.value = 1; // わからなければ2列目
-                }
-            });
-            
-            // UIの表示切り替え
-            document.getElementById('mappingSection').classList.remove('hidden');
-            document.getElementById('tableWrapper').classList.add('hidden');
-            document.getElementById('copyBtn').classList.add('hidden');
-            
-            showToast('列の自動認識が完了しました。設定を確認して「変換する」を押してください。');
-        }
+      {headers.length > 0 && (
+        <div className="bg-white p-6 rounded-xl border-t-4 border-t-blue-500 shadow-sm animate-fade-in">
+          <h3 className="text-lg font-bold mb-4">列の割り当て（マッピング）</h3>
+          <p className="text-sm text-gray-600 mb-4">自動推測しました。間違っている場合は修正して「取込実行」を押してください。</p>
+          
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+            {['date:📅 日付*', 'sales:💰 売上*', 'fee:💸 手数料', 'method:💳 決済手段', 'memo:📝 摘要'].map(item => {
+              const [key, label] = item.split(':');
+              return (
+                <div key={key}>
+                  <label className="block text-xs font-bold text-gray-700 mb-1">{label}</label>
+                  <select 
+                    value={mapping[key]} 
+                    onChange={e => setMapping({...mapping, [key]: parseInt(e.target.value)})}
+                    className="w-full p-2 border border-gray-300 rounded text-sm outline-none focus:border-blue-500"
+                  >
+                    {!label.includes('*') && <option value={-1}>（使用しない）</option>}
+                    {headers.map((h, i) => <option key={i} value={i}>{h || `列${i+1}`}</option>)}
+                  </select>
+                </div>
+              );
+            })}
+          </div>
 
-        // 「変換する」ボタンの処理
-        document.getElementById('generateBtn').addEventListener('click', function() {
-            generateData();
-        });
+          <div className="mt-6 flex justify-end">
+            <button onClick={executeImport} className="bg-green-600 hover:bg-green-700 text-white px-8 py-3 rounded-lg font-bold shadow-sm transition-colors">
+              帳簿に一括登録する
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
-        // 指定された列からデータを生成
-        function generateData() {
-            const idxDate = parseInt(document.getElementById('col-date').value);
-            const idxSales = parseInt(document.getElementById('col-sales').value);
-            const idxFee = parseInt(document.getElementById('col-fee').value);
-            const idxMethod = parseInt(document.getElementById('col-method').value);
-            const idxMemo = parseInt(document.getElementById('col-memo').value);
-            
-            generatedData = [];
-            
-            const parseAmount = (val) => {
-                if (!val) return 0;
-                // ¥, カンマ, スペースを除去して数値化
-                const cleaned = val.replace(/[¥,\\\s]/g, '');
-                const num = parseInt(cleaned, 10);
-                return isNaN(num) ? 0 : num;
-            };
-            
-            for (let i = dataStartIndex; i < currentCSVLines.length; i++) {
-                const row = currentCSVLines[i];
-                if (row.length === 0 || (row.length === 1 && row[0].trim() === '')) continue;
-                
-                const dateRaw = row[idxDate] ? row[idxDate].trim().replace(/^"|"$/g, '') : '';
-                // 日付記号(-や/)が含まれていない行は合計行などの可能性が高いのでスキップ
-                if (!dateRaw || (!dateRaw.includes('-') && !dateRaw.includes('/'))) continue;
-                
-                const salesRaw = row[idxSales] ? row[idxSales].trim().replace(/^"|"$/g, '') : '';
-                const salesAmount = parseAmount(salesRaw);
-                
-                let feeAmount = 0;
-                if (idxFee !== -1) {
-                    const feeRaw = row[idxFee] ? row[idxFee].trim().replace(/^"|"$/g, '') : '';
-                    feeAmount = parseAmount(feeRaw);
-                }
-                
-                const method = idxMethod !== -1 && row[idxMethod] ? row[idxMethod].trim().replace(/^"|"$/g, '') : '';
-                let memo = idxMemo !== -1 && row[idxMemo] ? row[idxMemo].trim().replace(/^"|"$/g, '') : '';
-                if (!memo || memo === '""' || memo === '任意の金額') memo = '売上';
-                
-                // --- 売上の仕訳作成 ---
-                if (salesAmount !== 0) {
-                    generatedData.push({
-                        date: dateRaw,
-                        account: salesAmount > 0 ? '売上高' : '売上高(マイナス/返金)', // マイナス売上の場合
-                        subAccount: '決済代行',
-                        memo: salesAmount < 0 ? `[返金等] ${memo}` : memo,
-                        amount: salesAmount, // マイナスの場合はそのまま出力
-                        method: method,
-                        taxType: '課税売上10%'
-                    });
-                }
-                
-                // --- 手数料の仕訳作成 ---
-                if (feeAmount !== 0) {
-                    generatedData.push({
-                        date: dateRaw,
-                        account: '支払手数料',
-                        subAccount: '決済手数料',
-                        memo: '決済手数料',
-                        amount: Math.abs(feeAmount), // 手数料は絶対値(プラス)で計上
-                        method: method,
-                        taxType: '対象外'
-                    });
-                }
-            }
-            
-            if (generatedData.length > 0) {
-                renderTable();
-                document.getElementById('tableWrapper').classList.remove('hidden');
-                document.getElementById('copyBtn').classList.remove('hidden');
-                document.getElementById('tableWrapper').scrollIntoView({ behavior: 'smooth', block: 'start' });
-                showToast(`変換完了！ ${generatedData.length}件の明細を作成しました。`);
-            } else {
-                showToast('処理可能な取引データが見つかりませんでした。列の設定を見直してください。', true);
-            }
-        }
+// ⚙️ 設定・エクスポート
+function SettingsView({ transactions, onClearAll }) {
+  
+  const exportTsv = () => {
+    if(transactions.length === 0) return alert('データがありません');
+    
+    // 複式簿記形式（freee, MFクラウド等向け汎用フォーマット）
+    let tsv = "日付\t借方勘定科目\t借方金額\t貸方勘定科目\t貸方金額\t摘要\n";
+    
+    const sorted = [...transactions].sort((a,b) => a.date.localeCompare(b.date));
+    
+    sorted.forEach(t => {
+      if (t.type === 'income') {
+        // 収入: 借方＝手段, 貸方＝売上高
+        tsv += `${t.date}\t${t.method}\t${t.amount}\t${t.account}\t${t.amount}\t${t.memo}\n`;
+      } else {
+        // 支出: 借方＝経費科目, 貸方＝手段
+        tsv += `${t.date}\t${t.account}\t${t.amount}\t${t.method}\t${t.amount}\t${t.memo}\n`;
+      }
+    });
 
-        // テーブルの描画
-        function renderTable() {
-            const tbody = document.getElementById('tableBody');
-            tbody.innerHTML = '';
-            
-            generatedData.forEach((row, index) => {
-                const tr = document.createElement('tr');
-                tr.className = index % 2 === 0 ? 'bg-white' : 'bg-gray-50';
-                
-                tr.innerHTML = `
-                    <td class="px-6 py-2">${row.date}</td>
-                    <td class="px-6 py-2 font-medium ${row.account.includes('売上高') ? 'text-blue-600' : 'text-red-600'}">${row.account}</td>
-                    <td class="px-6 py-2">${row.subAccount}</td>
-                    <td class="px-6 py-2 truncate max-w-xs" title="${row.memo}">${row.memo}</td>
-                    <td class="px-6 py-2 text-right">${row.amount.toLocaleString()}</td>
-                    <td class="px-6 py-2">${row.method}</td>
-                    <td class="px-6 py-2 text-xs text-gray-500">${row.taxType}</td>
-                `;
-                tbody.appendChild(tr);
-            });
-            
-            document.getElementById('recordCount').textContent = `合計: ${generatedData.length} 行`;
-        }
+    const blob = new Blob([tsv], { type: 'text/tab-separated-values;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", `帳簿データ_${new Date().toISOString().split('T')[0]}.tsv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
-        // クリップボードにコピー
-        function copyToClipboard() {
-            if (generatedData.length === 0) return;
-            
-            // TSV（タブ区切り）形式で文字列を作成
-            let tsv = "日付\t勘定科目\t補助項目\t内容・摘要\t金額\t決済手段\t区分\n";
-            for(let row of generatedData) {
-                tsv += `${row.date}\t${row.account}\t${row.subAccount}\t${row.memo}\t${row.amount}\t${row.method}\t${row.taxType}\n`;
-            }
-            
-            const textarea = document.createElement('textarea');
-            textarea.value = tsv;
-            textarea.style.position = 'fixed';
-            textarea.style.opacity = 0;
-            document.body.appendChild(textarea);
-            textarea.select();
-            
-            try {
-                document.execCommand('copy');
-                showToast('コピーしました！スプレッドシートのA1セルに貼り付けてください。');
-            } catch (err) {
-                showToast('コピーに失敗しました。', true);
-            } finally {
-                document.body.removeChild(textarea);
-            }
-        }
+  return (
+    <div className="max-w-2xl mx-auto space-y-6">
+      <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm">
+        <h2 className="text-lg font-bold text-gray-800 mb-2">会計ソフト用データ出力</h2>
+        <p className="text-sm text-gray-600 mb-6">
+          登録された全データを、確定申告ソフト（freee、マネーフォワード、弥生など）にインポートしやすい「複式簿記形式」のTSVファイルとしてダウンロードします。
+        </p>
+        <button onClick={exportTsv} className="flex items-center gap-2 bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 font-bold py-3 px-6 rounded-lg transition-colors">
+          <Download className="w-5 h-5" /> 汎用データ(TSV)をダウンロード
+        </button>
+      </div>
 
-        // トースト通知の表示
-        function showToast(message, isError = false) {
-            const toast = document.getElementById('toast');
-            toast.textContent = message;
-            toast.className = `fixed bottom-6 right-6 px-6 py-3 rounded shadow-lg transition-opacity text-white z-50 ${isError ? 'bg-red-500' : 'bg-green-600'}`;
-            toast.classList.remove('hidden');
-            
-            setTimeout(() => {
-                toast.classList.add('opacity-0');
-                setTimeout(() => {
-                    toast.classList.add('hidden');
-                    toast.classList.remove('opacity-0');
-                }, 300);
-            }, 4000);
-        }
-    </script>
-</body>
-</html>
+      <div className="bg-white p-6 rounded-xl border border-red-100 shadow-sm mt-8">
+        <h2 className="text-lg font-bold text-red-600 mb-2">危険な操作</h2>
+        <p className="text-sm text-gray-600 mb-4">
+          ブラウザに保存されているすべての帳簿データを完全に削除します。この操作は取り消せません。
+        </p>
+        <button onClick={onClearAll} className="flex items-center gap-2 text-red-600 border border-red-200 hover:bg-red-50 font-bold py-2 px-4 rounded-lg transition-colors text-sm">
+          <Trash2 className="w-4 h-4" /> 全データを初期化
+        </button>
+      </div>
+    </div>
+  );
+}
